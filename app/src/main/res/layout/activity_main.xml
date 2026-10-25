@@ -20,13 +20,13 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="10dp"
         android:text="Tap button to enable service"
-        android:textColor="#666" />
+        android:textColor="#666666" />
 
     <Button
         android:id="@+id/btnEnable"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="20dp"
-        android:text="Enable Accessibility & Start Overlay" />
+        android:text="Enable Accessibility &amp; Start Overlay" />
 
 </LinearLayout>
