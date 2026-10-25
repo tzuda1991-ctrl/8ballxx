@@ -2,6 +2,7 @@ package com.vip.ttzz;
 
 import android.accessibilityservice.AccessibilityService;
 import android.content.Context;
+import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.DashPathEffect;
@@ -9,6 +10,9 @@ import android.graphics.Paint;
 import android.graphics.PixelFormat;
 import android.graphics.RectF;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
+import android.view.Display;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
@@ -17,29 +21,34 @@ import android.view.accessibility.AccessibilityEvent;
 import android.widget.Button;
 import android.widget.Toast;
 
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
 public class AimService extends AccessibilityService {
 
     private WindowManager windowManager;
     private ProAimView aimView;
-    private Button menuBtn;
-    private Button modeBtn;
+    private Button toggleBtn;
+    private Button autoBtn;
 
-    // 2 Floating transparent touch handles taaki baaki poori screen par game touch kaam kare!
     private View cueHandle;
     private View targetHandle;
     private WindowManager.LayoutParams cueParams;
     private WindowManager.LayoutParams targetParams;
 
     private boolean isVisible = true;
+    private boolean isAutoScan = false;
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private final ExecutorService scannerPool = Executors.newSingleThreadExecutor();
+    private static final int HANDLE_SIZE = 100;
 
     @Override
     protected void onServiceConnected() {
         super.onServiceConnected();
-        setupProOverlay();
-        Toast.makeText(this, "Pro Aim Line Ready! Rotate phone to Landscape for 8Ball.", Toast.LENGTH_LONG).show();
+        setupOverlay();
     }
 
-    private void setupProOverlay() {
+    private void setupOverlay() {
         if (windowManager != null) return;
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
 
@@ -47,7 +56,7 @@ public class AimService extends AccessibilityService {
                 ? WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
                 : WindowManager.LayoutParams.TYPE_PHONE;
 
-        // 1. Drawing Layer (100% Untouchable - Game touch bilkul block nahi karega!)
+        // 1. Drawing Layer (Untouchable - Game touch chalta rahega)
         aimView = new ProAimView(this);
         WindowManager.LayoutParams drawParams = new WindowManager.LayoutParams(
                 WindowManager.LayoutParams.MATCH_PARENT,
@@ -59,16 +68,15 @@ public class AimService extends AccessibilityService {
                 PixelFormat.TRANSLUCENT);
         windowManager.addView(aimView, drawParams);
 
-        // 2. Target Ball Handle (Sirf is chhote circle ko pakad kar ball par rakhna hai)
-        int handleSize = 110;
+        // 2. Target Ball Circle Handle (Red)
         targetHandle = new View(this);
         targetParams = new WindowManager.LayoutParams(
-                handleSize, handleSize, flagOverlay,
+                HANDLE_SIZE, HANDLE_SIZE, flagOverlay,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 PixelFormat.TRANSLUCENT);
         targetParams.gravity = Gravity.TOP | Gravity.LEFT;
-        targetParams.x = (int) aimView.ballX - handleSize / 2;
-        targetParams.y = (int) aimView.ballY - handleSize / 2;
+        targetParams.x = (int) aimView.ballX - HANDLE_SIZE / 2;
+        targetParams.y = (int) aimView.ballY - HANDLE_SIZE / 2;
 
         targetHandle.setOnTouchListener(new View.OnTouchListener() {
             private float dX, dY;
@@ -83,8 +91,8 @@ public class AimService extends AccessibilityService {
                         targetParams.x = (int) (event.getRawX() + dX);
                         targetParams.y = (int) (event.getRawY() + dY);
                         windowManager.updateViewLayout(targetHandle, targetParams);
-                        aimView.ballX = targetParams.x + handleSize / 2f;
-                        aimView.ballY = targetParams.y + handleSize / 2f;
+                        aimView.ballX = targetParams.x + HANDLE_SIZE / 2f;
+                        aimView.ballY = targetParams.y + HANDLE_SIZE / 2f;
                         aimView.invalidate();
                         return true;
                 }
@@ -93,15 +101,15 @@ public class AimService extends AccessibilityService {
         });
         windowManager.addView(targetHandle, targetParams);
 
-        // 3. Cue Ball Handle (Bank/Bounce shot ke angle ke liye)
+        // 3. Cue Ball Circle Handle (Green)
         cueHandle = new View(this);
         cueParams = new WindowManager.LayoutParams(
-                handleSize, handleSize, flagOverlay,
+                HANDLE_SIZE, HANDLE_SIZE, flagOverlay,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 PixelFormat.TRANSLUCENT);
         cueParams.gravity = Gravity.TOP | Gravity.LEFT;
-        cueParams.x = (int) aimView.cueX - handleSize / 2;
-        cueParams.y = (int) aimView.cueY - handleSize / 2;
+        cueParams.x = (int) aimView.cueX - HANDLE_SIZE / 2;
+        cueParams.y = (int) aimView.cueY - HANDLE_SIZE / 2;
 
         cueHandle.setOnTouchListener(new View.OnTouchListener() {
             private float dX, dY;
@@ -116,8 +124,8 @@ public class AimService extends AccessibilityService {
                         cueParams.x = (int) (event.getRawX() + dX);
                         cueParams.y = (int) (event.getRawY() + dY);
                         windowManager.updateViewLayout(cueHandle, cueParams);
-                        aimView.cueX = cueParams.x + handleSize / 2f;
-                        aimView.cueY = cueParams.y + handleSize / 2f;
+                        aimView.cueX = cueParams.x + HANDLE_SIZE / 2f;
+                        aimView.cueY = cueParams.y + HANDLE_SIZE / 2f;
                         aimView.invalidate();
                         return true;
                 }
@@ -126,12 +134,12 @@ public class AimService extends AccessibilityService {
         });
         windowManager.addView(cueHandle, cueParams);
 
-        // 4. Control Buttons (Top Corner)
-        menuBtn = new Button(this);
-        menuBtn.setText("ON");
-        menuBtn.setTextSize(10f);
-        menuBtn.setTextColor(Color.WHITE);
-        menuBtn.setBackgroundColor(Color.argb(210, 0, 180, 0));
+        // 4. ON/OFF Button
+        toggleBtn = new Button(this);
+        toggleBtn.setText("ON");
+        toggleBtn.setTextSize(10f);
+        toggleBtn.setTextColor(Color.WHITE);
+        toggleBtn.setBackgroundColor(Color.argb(210, 0, 180, 0));
 
         WindowManager.LayoutParams btn1Params = new WindowManager.LayoutParams(
                 130, 95, flagOverlay, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT);
@@ -139,37 +147,168 @@ public class AimService extends AccessibilityService {
         btn1Params.x = 20;
         btn1Params.y = 80;
 
-        menuBtn.setOnClickListener(v -> {
+        toggleBtn.setOnClickListener(v -> {
             isVisible = !isVisible;
             int vis = isVisible ? View.VISIBLE : View.GONE;
             aimView.setVisibility(vis);
             targetHandle.setVisibility(vis);
             cueHandle.setVisibility(vis);
-            modeBtn.setVisibility(vis);
-            menuBtn.setText(isVisible ? "ON" : "OFF");
-            menuBtn.setBackgroundColor(isVisible ? Color.argb(210, 0, 180, 0) : Color.argb(210, 200, 0, 0));
+            autoBtn.setVisibility(vis);
+            toggleBtn.setText(isVisible ? "ON" : "OFF");
+            toggleBtn.setBackgroundColor(isVisible ? Color.argb(210, 0, 180, 0) : Color.argb(210, 200, 0, 0));
         });
-        windowManager.addView(menuBtn, btn1Params);
+        windowManager.addView(toggleBtn, btn1Params);
 
-        // Mode Button (6-Pocket Lines + Bounce toggle)
-        modeBtn = new Button(this);
-        modeBtn.setText("3-LINE");
-        modeBtn.setTextSize(9f);
-        modeBtn.setTextColor(Color.BLACK);
-        modeBtn.setBackgroundColor(Color.argb(220, 255, 215, 0));
+        // 5. AUTO DETECT Button (Scans Screen for White Aim Line & Cue Ball)
+        autoBtn = new Button(this);
+        autoBtn.setText("AUTO: OFF");
+        autoBtn.setTextSize(9f);
+        autoBtn.setTextColor(Color.BLACK);
+        autoBtn.setBackgroundColor(Color.argb(220, 255, 215, 0));
 
         WindowManager.LayoutParams btn2Params = new WindowManager.LayoutParams(
-                150, 95, flagOverlay, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT);
+                180, 95, flagOverlay, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT);
         btn2Params.gravity = Gravity.TOP | Gravity.LEFT;
         btn2Params.x = 160;
         btn2Params.y = 80;
 
-        modeBtn.setOnClickListener(v -> {
-            aimView.showPocketLines = !aimView.showPocketLines;
-            modeBtn.setText(aimView.showPocketLines ? "ALL" : "BOUNCE");
-            aimView.invalidate();
+        autoBtn.setOnClickListener(v -> {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+                Toast.makeText(this, "Auto-Detect requires Android 11+", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            isAutoScan = !isAutoScan;
+            autoBtn.setText(isAutoScan ? "AUTO: ON" : "AUTO: OFF");
+            autoBtn.setBackgroundColor(isAutoScan ? Color.argb(220, 0, 255, 255) : Color.argb(220, 255, 215, 0));
+            if (isAutoScan) {
+                runAutoScanLoop();
+            }
         });
-        windowManager.addView(modeBtn, btn2Params);
+        windowManager.addView(autoBtn, btn2Params);
+    }
+
+    // Auto-Scan loop using Android 11+ Accessibility takeScreenshot
+    private void runAutoScanLoop() {
+        if (!isAutoScan || !isVisible || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return;
+
+        takeScreenshot(Display.DEFAULT_DISPLAY, scannerPool, new TakeScreenshotCallback() {
+            @Override
+            public void onSuccess(ScreenshotResult screenshot) {
+                try {
+                    Bitmap hwBitmap = Bitmap.wrapHardwareBuffer(screenshot.getHardwareBuffer(), screenshot.getColorSpace());
+                    if (hwBitmap != null) {
+                        Bitmap bmp = hwBitmap.copy(Bitmap.Config.ARGB_8888, false);
+                        hwBitmap.recycle();
+                        screenshot.getHardwareBuffer().close();
+                        detectWhiteLineEndpoints(bmp);
+                    }
+                } catch (Exception ignored) {}
+                handler.postDelayed(() -> runAutoScanLoop(), 450);
+            }
+
+            @Override
+            public void onFailure(int errorCode) {
+                handler.postDelayed(() -> runAutoScanLoop(), 600);
+            }
+        });
+    }
+
+    // Finds the pure white game aim line (R>245, G>245, B>245) inside the green pool table
+    private void detectWhiteLineEndpoints(Bitmap bmp) {
+        int w = bmp.getWidth();
+        int h = bmp.getHeight();
+        int left = (int) (w * 0.175f);
+        int right = (int) (w * 0.825f);
+        int top = (int) (h * 0.22f);
+        int bottom = (int) (h * 0.82f);
+
+        // Hough-style line voting along directions from current cue ball or full table
+        float bestScore = 0;
+        float foundCueX = -1, foundCueY = -1, foundTargetX = -1, foundTargetY = -1;
+
+        // Collect bright white pixels inside table
+        int maxPts = 600;
+        float[] px = new float[maxPts];
+        float[] py = new float[maxPts];
+        int count = 0;
+
+        for (int y = top; y < bottom && count < maxPts; y += 4) {
+            for (int x = left; x < right && count < maxPts; x += 4) {
+                int c = bmp.getPixel(x, y);
+                int r = (c >> 16) & 0xFF;
+                int g = (c >> 8) & 0xFF;
+                int b = c & 0xFF;
+                // Pure bright white pixel of 8Ball Pool aim line
+                if (r > 246 && g > 246 && b > 246) {
+                    px[count] = x;
+                    py[count] = y;
+                    count++;
+                }
+            }
+        }
+        bmp.recycle();
+
+        // Find longest colinear chain of white pixels (the game's white aim line)
+        if (count > 12) {
+            for (int i = 0; i < count; i += 2) {
+                for (int j = i + 1; j < count; j += 3) {
+                    float dx = px[j] - px[i];
+                    float dy = py[j] - py[i];
+                    float len = (float) Math.hypot(dx, dy);
+                    if (len < 120f) continue;
+
+                    float ux = dx / len;
+                    float uy = dy / len;
+                    int inliers = 0;
+                    float minProj = 0, maxProj = len;
+                    float startX = px[i], startY = py[i], endX = px[j], endY = py[j];
+
+                    for (int k = 0; k < count; k++) {
+                        float vx = px[k] - px[i];
+                        float vy = py[k] - py[i];
+                        float dist = Math.abs(vx * uy - vy * ux);
+                        if (dist < 4.5f) {
+                            inliers++;
+                            float proj = vx * ux + vy * uy;
+                            if (proj < minProj) { minProj = proj; startX = px[k]; startY = py[k]; }
+                            if (proj > maxProj) { maxProj = proj; endX = px[k]; endY = py[k]; }
+                        }
+                    }
+
+                    if (inliers > bestScore) {
+                        bestScore = inliers;
+                        foundCueX = startX;
+                        foundCueY = startY;
+                        foundTargetX = endX;
+                        foundTargetY = endY;
+                    }
+                }
+            }
+        }
+
+        if (bestScore > 18 && foundCueX > 0) {
+            // Keep cue handle closest to previous cue position so direction doesn't flip
+            float d1 = (float) Math.hypot(foundCueX - aimView.cueX, foundCueY - aimView.cueY);
+            float d2 = (float) Math.hypot(foundTargetX - aimView.cueX, foundTargetY - aimView.cueY);
+            final float cx = (d1 <= d2) ? foundCueX : foundTargetX;
+            final float cy = (d1 <= d2) ? foundCueY : foundTargetY;
+            final float tx = (d1 <= d2) ? foundTargetX : foundCueX;
+            final float ty = (d1 <= d2) ? foundTargetY : foundCueY;
+
+            handler.post(() -> {
+                aimView.cueX = cx;
+                aimView.cueY = cy;
+                aimView.ballX = tx;
+                aimView.ballY = ty;
+                cueParams.x = (int) cx - HANDLE_SIZE / 2;
+                cueParams.y = (int) cy - HANDLE_SIZE / 2;
+                targetParams.x = (int) tx - HANDLE_SIZE / 2;
+                targetParams.y = (int) ty - HANDLE_SIZE / 2;
+                windowManager.updateViewLayout(cueHandle, cueParams);
+                windowManager.updateViewLayout(targetHandle, targetParams);
+                aimView.invalidate();
+            });
+        }
     }
 
     @Override
@@ -178,37 +317,43 @@ public class AimService extends AccessibilityService {
     @Override
     public void onInterrupt() {}
 
-    // Full Physics & Pocket Guideline View
+    // Calibrated View matching exact screenshot proportions
     private static class ProAimView extends View {
         private final Paint pocketLinePaint = new Paint();
-        private final Paint bounceLinePaint = new Paint();
+        private final Paint mainLinePaint = new Paint();
+        private final Paint deflectPaint = new Paint();
         private final Paint tableBorderPaint = new Paint();
         private final Paint handlePaint = new Paint();
 
-        float cueX = 450, cueY = 500;
-        float ballX = 750, ballY = 500;
-        boolean showPocketLines = true;
-
+        float cueX = 1000, cueY = 650;
+        float ballX = 600, ballY = 300;
         private final RectF tableRect = new RectF();
 
         public ProAimView(Context context) {
             super(context);
 
-            // 6-Pocket Laser Lines (Yellow Dotted)
-            pocketLinePaint.setColor(Color.argb(190, 255, 255, 0));
-            pocketLinePaint.setStrokeWidth(3.5f);
+            // 6-Pocket Guidelines (Thin Yellow Dotted)
+            pocketLinePaint.setColor(Color.argb(180, 255, 255, 0));
+            pocketLinePaint.setStrokeWidth(3f);
             pocketLinePaint.setStyle(Paint.Style.STROKE);
             pocketLinePaint.setAntiAlias(true);
-            pocketLinePaint.setPathEffect(new DashPathEffect(new float[]{15, 10}, 0));
+            pocketLinePaint.setPathEffect(new DashPathEffect(new float[]{12, 10}, 0));
 
-            // Cushion Bounce Line (Bright Cyan/White Solid Line)
-            bounceLinePaint.setColor(Color.CYAN);
-            bounceLinePaint.setStrokeWidth(5f);
-            bounceLinePaint.setStyle(Paint.Style.STROKE);
-            bounceLinePaint.setAntiAlias(true);
+            // Main Extended Aim + Cushion Bounce Line (Bright White/Cyan)
+            mainLinePaint.setColor(Color.CYAN);
+            mainLinePaint.setStrokeWidth(5f);
+            mainLinePaint.setStyle(Paint.Style.STROKE);
+            mainLinePaint.setAntiAlias(true);
 
-            // Pool Table Inner Cushion Boundary
-            tableBorderPaint.setColor(Color.argb(130, 0, 255, 100));
+            // 90-Degree Cue Ball Deflection Line (Green Dotted)
+            deflectPaint.setColor(Color.GREEN);
+            deflectPaint.setStrokeWidth(4f);
+            deflectPaint.setStyle(Paint.Style.STROKE);
+            deflectPaint.setAntiAlias(true);
+            deflectPaint.setPathEffect(new DashPathEffect(new float[]{15, 10}, 0));
+
+            // Calibrated Table Cushion Border
+            tableBorderPaint.setColor(Color.argb(120, 0, 255, 100));
             tableBorderPaint.setStrokeWidth(3f);
             tableBorderPaint.setStyle(Paint.Style.STROKE);
 
@@ -224,66 +369,67 @@ public class AimService extends AccessibilityService {
             int w = getWidth();
             int h = getHeight();
 
-            // Standard 8-Ball Pool Table Cushion Area (Auto-adjusts to Landscape/Portrait)
-            float left = w * 0.135f;
-            float right = w * 0.865f;
-            float top = h * 0.19f;
-            float bottom = h * 0.85f;
+            // Exact Inner Cushion Bounds calibrated from your screenshot!
+            float left = w * 0.176f;
+            float right = w * 0.824f;
+            float top = h * 0.228f;
+            float bottom = h * 0.818f;
             tableRect.set(left, top, right, bottom);
 
-            // Draw Table Frame
+            // 1. Draw Inner Cushion Box
             canvas.drawRect(tableRect, tableBorderPaint);
 
-            // 1. Draw 6-Pocket Auto-Lines from Target Ball (Ball se charo kono aur beech ke pockets tak seedhi line)
-            if (showPocketLines) {
-                float midX = (left + right) / 2f;
-                // Top 3 pockets
-                canvas.drawLine(ballX, ballY, left, top, pocketLinePaint);
-                canvas.drawLine(ballX, ballY, midX, top, pocketLinePaint);
-                canvas.drawLine(ballX, ballY, right, top, pocketLinePaint);
-                // Bottom 3 pockets
-                canvas.drawLine(ballX, ballY, left, bottom, pocketLinePaint);
-                canvas.drawLine(ballX, ballY, midX, bottom, pocketLinePaint);
-                canvas.drawLine(ballX, ballY, right, bottom, pocketLinePaint);
+            // 2. Draw 6-Pocket Auto Lines from Red Target Circle to all 6 Pockets!
+            float midX = (left + right) / 2f;
+            canvas.drawLine(ballX, ballY, left, top, pocketLinePaint);
+            canvas.drawLine(ballX, ballY, midX, top, pocketLinePaint);
+            canvas.drawLine(ballX, ballY, right, top, pocketLinePaint);
+            canvas.drawLine(ballX, ballY, left, bottom, pocketLinePaint);
+            canvas.drawLine(ballX, ballY, midX, bottom, pocketLinePaint);
+            canvas.drawLine(ballX, ballY, right, bottom, pocketLinePaint);
+
+            // 3. Draw Extended Shot Line + 2 Cushion Bounces
+            float dx = ballX - cueX;
+            float dy = ballY - cueY;
+            canvas.drawLine(cueX, cueY, ballX, ballY, mainLinePaint);
+            drawRayWithBounces(canvas, ballX, ballY, dx, dy, 2);
+
+            // 4. Draw 90-Degree Tangent Deflection Line (White ball takrane ke baad kahan jayegi)
+            float len = (float) Math.hypot(dx, dy);
+            if (len > 1f) {
+                float nx = -dy / len;
+                float ny = dx / len;
+                canvas.drawLine(ballX - nx * 220f, ballY - ny * 220f, ballX + nx * 220f, ballY + ny * 220f, deflectPaint);
             }
 
-            // 2. Draw Cue-to-Ball & 3-Cushion Bounce Ray (Ball last tak kaha jayegi!)
-            canvas.drawLine(cueX, cueY, ballX, ballY, bounceLinePaint);
-            drawRayWithBounces(canvas, ballX, ballY, ballX - cueX, ballY - cueY, 3);
-
-            // 3. Draw Target Circle (Red) & Cue Circle (Green)
+            // 5. Draw Handles
             handlePaint.setColor(Color.RED);
-            canvas.drawCircle(ballX, ballY, 38f, handlePaint);
-            canvas.drawCircle(ballX, ballY, 5f, handlePaint);
+            canvas.drawCircle(ballX, ballY, 26f, handlePaint);
+            canvas.drawCircle(ballX, ballY, 4f, handlePaint);
 
             handlePaint.setColor(Color.GREEN);
-            canvas.drawCircle(cueX, cueY, 38f, handlePaint);
-            canvas.drawCircle(cueX, cueY, 5f, handlePaint);
+            canvas.drawCircle(cueX, cueY, 26f, handlePaint);
+            canvas.drawCircle(cueX, cueY, 4f, handlePaint);
         }
 
-        // Exact Physics Ray-Tracing for Cushion Reflections (Bank Shots)
         private void drawRayWithBounces(Canvas canvas, float startX, float startY, float dirX, float dirY, int bouncesLeft) {
             if (bouncesLeft <= 0 || (Math.abs(dirX) < 0.001f && Math.abs(dirY) < 0.001f)) return;
 
             float tMin = Float.MAX_VALUE;
             boolean hitVertical = false;
 
-            // Left Cushion
             if (dirX < 0) {
                 float t = (tableRect.left - startX) / dirX;
                 if (t > 0.01f && t < tMin) { tMin = t; hitVertical = true; }
             }
-            // Right Cushion
             if (dirX > 0) {
                 float t = (tableRect.right - startX) / dirX;
                 if (t > 0.01f && t < tMin) { tMin = t; hitVertical = true; }
             }
-            // Top Cushion
             if (dirY < 0) {
                 float t = (tableRect.top - startY) / dirY;
                 if (t > 0.01f && t < tMin) { tMin = t; hitVertical = false; }
             }
-            // Bottom Cushion
             if (dirY > 0) {
                 float t = (tableRect.bottom - startY) / dirY;
                 if (t > 0.01f && t < tMin) { tMin = t; hitVertical = false; }
@@ -293,10 +439,9 @@ public class AimService extends AccessibilityService {
                 float hitX = startX + dirX * tMin;
                 float hitY = startY + dirY * tMin;
 
-                canvas.drawLine(startX, startY, hitX, hitY, bounceLinePaint);
-                canvas.drawCircle(hitX, hitY, 10f, bounceLinePaint); // Cushion impact point
+                canvas.drawLine(startX, startY, hitX, hitY, mainLinePaint);
+                canvas.drawCircle(hitX, hitY, 8f, mainLinePaint);
 
-                // Reflect direction for next cushion bounce
                 float nextDirX = hitVertical ? -dirX : dirX;
                 float nextDirY = hitVertical ? dirY : -dirY;
 
